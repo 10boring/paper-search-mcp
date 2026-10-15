@@ -12,89 +12,100 @@ def response(status, headers=None):
     return Mock(status_code=status, headers=headers or {})
 
 
+class FakeClock:
+    """time.monotonic and time.sleep for the retry loop: sleeping advances the clock."""
+
+    def __init__(self):
+        self.now = 0.0
+        self.sleep = Mock(side_effect=self._advance)
+
+    def _advance(self, seconds):
+        self.now += seconds
+
+    def monotonic(self):
+        return self.now
+
+    def waits(self):
+        return [call.args[0] for call in self.sleep.call_args_list]
+
+
 @pytest.fixture
-def searcher(monkeypatch):
+def clock(monkeypatch):
+    fake = FakeClock()
+    monkeypatch.setattr(semantic.time, "monotonic", fake.monotonic)
+    monkeypatch.setattr(semantic.time, "sleep", fake.sleep)
+    return fake
+
+
+@pytest.fixture
+def searcher(monkeypatch, clock):
     instance = semantic.SemanticSearcher()
     monkeypatch.setattr(instance, "get_api_key", lambda: None)
     return instance
 
 
 @pytest.mark.parametrize("exception_path", [False, True])
-def test_anonymous_rate_limit_waits_and_retries(searcher, monkeypatch, exception_path):
-    # Keyless requests share one pool with every other keyless user, so a 429
-    # is usually gone a little later; giving up at once loses the source.
-    limited = response(429, {"Retry-After": "7"})
+def test_keyless_rate_limit_backs_off_then_retries_every_8s_until_answered(
+    searcher, monkeypatch, clock, exception_path
+):
+    # Keyless requests share one pool with every other keyless user, so getting
+    # through is luck: keep asking until it answers.
+    limited = response(429)
     if exception_path:
-        first = response(200)
-        first.raise_for_status.side_effect = requests.HTTPError(response=limited)
+        refused = response(200)
+        refused.raise_for_status.side_effect = requests.HTTPError(response=limited)
     else:
-        first = limited
+        refused = limited
     success = response(200)
-    get = Mock(side_effect=[first, success])
-    sleep = Mock()
+    get = Mock(side_effect=[refused] * 7 + [success])
     monkeypatch.setattr(searcher.session, "get", get)
-    monkeypatch.setattr(semantic.time, "sleep", sleep)
     assert searcher.request_api("paper/search", {"query": "test"}) is success
-    assert get.call_count == 2
-    sleep.assert_called_once_with(7)
+    assert get.call_count == 8
+    assert clock.waits() == [1, 2, 4, 8, 8, 8, 8]
 
 
-def test_anonymous_retries_are_bounded_and_back_off(searcher, monkeypatch):
+def test_keyless_retries_give_up_after_five_minutes(searcher, monkeypatch, clock):
     get = Mock(return_value=response(429))
-    sleep = Mock()
     monkeypatch.setattr(searcher.session, "get", get)
-    monkeypatch.setattr(semantic.time, "sleep", sleep)
     result = searcher.request_api("paper/search", {})
     assert result["error"] == "rate_limited"
     assert result["status_code"] == 429
-    assert get.call_count == 6
-    assert [call.args[0] for call in sleep.call_args_list] == [5, 10, 20, 30, 30]
+    waits = clock.waits()
+    assert waits[:4] == [1, 2, 4, 8]
+    assert set(waits[4:]) == {8}
+    assert 300 - 8 < sum(waits) <= 300
+    assert get.call_count == len(waits) + 1
 
 
-def test_a_long_retry_after_is_capped(searcher, monkeypatch):
-    success = response(200)
-    get = Mock(side_effect=[response(429, {"Retry-After": "600"}), success])
-    sleep = Mock()
-    monkeypatch.setattr(searcher.session, "get", get)
-    monkeypatch.setattr(semantic.time, "sleep", sleep)
-    assert searcher.request_api("paper/search", {}) is success
-    sleep.assert_called_once_with(30)
-
-
-def test_authenticated_rate_limit_retries_with_retry_after(searcher, monkeypatch):
+def test_authenticated_rate_limit_retries_with_retry_after(searcher, monkeypatch, clock):
     monkeypatch.setattr(searcher, "get_api_key", lambda: "test-key")
     success = response(200)
     get = Mock(side_effect=[response(429, {"Retry-After": "4"}), success])
-    sleep = Mock()
     monkeypatch.setattr(searcher.session, "get", get)
-    monkeypatch.setattr(semantic.time, "sleep", sleep)
     assert searcher.request_api("paper/search", {}) is success
     assert get.call_count == 2
     assert all(call.kwargs["headers"] == {"x-api-key": "test-key"} for call in get.call_args_list)
-    sleep.assert_called_once_with(4)
+    assert clock.waits() == [4]
 
 
-def test_authenticated_retries_are_bounded(searcher, monkeypatch):
+def test_authenticated_retries_are_bounded(searcher, monkeypatch, clock):
     monkeypatch.setattr(searcher, "get_api_key", lambda: "test-key")
     get = Mock(return_value=response(429))
-    sleep = Mock()
     monkeypatch.setattr(searcher.session, "get", get)
-    monkeypatch.setattr(semantic.time, "sleep", sleep)
     assert searcher.request_api("paper/search", {})["error"] == "rate_limited"
     assert get.call_count == 3
-    assert [call.args[0] for call in sleep.call_args_list] == [2, 4]
+    assert clock.waits() == [2, 4]
 
 
 @pytest.mark.parametrize("fallback_status", [200, 429])
 def test_rejected_key_falls_back_to_anonymous_access(searcher, monkeypatch, fallback_status):
     monkeypatch.setattr(searcher, "get_api_key", lambda: "rejected-key")
-    get = Mock(side_effect=[response(403)] + [response(fallback_status)] * 5)
-    sleep = Mock()
+    fallback = response(fallback_status)
+    get = Mock(side_effect=lambda *a, **k: response(403) if get.call_count == 1 else fallback)
     monkeypatch.setattr(searcher.session, "get", get)
-    monkeypatch.setattr(semantic.time, "sleep", sleep)
     result = searcher.request_api("paper/search", {})
     if fallback_status == 200:
-        assert result.status_code == 200
+        assert result is fallback
         assert get.call_count == 2
     else:
         assert result["error"] == "rate_limited"
@@ -104,6 +115,5 @@ def test_rejected_key_falls_back_to_anonymous_access(searcher, monkeypatch, fall
 
 def test_search_surfaces_rate_limit_as_error(searcher, monkeypatch):
     monkeypatch.setattr(searcher.session, "get", Mock(return_value=response(429)))
-    monkeypatch.setattr(semantic.time, "sleep", Mock())
     with pytest.raises(semantic.SemanticScholarRequestError, match="rate_limited, HTTP 429"):
         searcher.search("test")

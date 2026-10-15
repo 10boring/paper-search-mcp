@@ -50,8 +50,8 @@ mcp = FastMCP("paper_search_server")
 logger = logging.getLogger(__name__)
 GOOGLE_SCHOLAR_TOOL_TIMEOUT_SECONDS = 20.0
 SEARCH_PAPERS_SOURCE_TIMEOUT_SECONDS = 45.0
-# Keyless Semantic Scholar retries a 429 for up to about 100 seconds.
-SEMANTIC_SOURCE_TIMEOUT_SECONDS = 120.0
+# Keyless Semantic Scholar retries a 429 for up to five minutes.
+SEMANTIC_SOURCE_TIMEOUT_SECONDS = 330.0
 SEARCH_EXECUTOR_MAX_WORKERS = 32
 
 
