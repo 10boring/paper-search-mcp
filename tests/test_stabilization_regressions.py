@@ -23,12 +23,24 @@ def test_mcp_dependency_stays_on_compatible_major_version():
     assert '"fastmcp>=3.4.2,<4"' in project_config
 
 
-def test_arxiv_uses_https_and_quotes_plain_multi_word_query():
+def test_arxiv_uses_https_and_requires_every_word_of_a_plain_query():
+    # arXiv reads bare words as OR, so a plain query must join its words with
+    # AND. Stopwords are left out: arXiv does not index them, and one in an
+    # AND query matches nothing.
     assert ArxivSearcher.BASE_URL == "https://export.arxiv.org/api/query"
     assert (
         ArxivSearcher._build_search_query("  machine   learning  ")
-        == 'all:"machine learning"'
+        == "all:machine AND all:learning"
     )
+    assert (
+        ArxivSearcher._build_search_query(
+            "large language model inference on consumer hardware"
+        )
+        == "all:large AND all:language AND all:model AND all:inference"
+        " AND all:consumer AND all:hardware"
+    )
+    assert ArxivSearcher._build_search_query("transformers") == "all:transformers"
+    assert ArxivSearcher._build_search_query("on the") == 'all:"on the"'
     assert (
         ArxivSearcher._build_search_query('"machine learning"')
         == '"machine learning"'

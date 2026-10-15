@@ -41,6 +41,11 @@ class ArxivSearcher(PaperSource):
         re.IGNORECASE,
     )
     _BOOLEAN_OP_RE = re.compile(r"(?:^|\s)(AND|OR|ANDNOT)(?:\s|$)")
+    # Lucene's English stopwords, which arXiv's index leaves out.
+    _STOPWORDS = frozenset(
+        "a an and are as at be but by for if in into is it no not of on or such "
+        "that the their then there these they this to was will with".split()
+    )
     _PAPER_ID_RE = re.compile(
         r"(?:[0-9]{4}\.[0-9]{4,5}|[a-z-]+(?:\.[A-Z]{2})?/[0-9]{7})(?:v[1-9][0-9]*)?"
     )
@@ -175,7 +180,8 @@ class ArxivSearcher(PaperSource):
 
     @staticmethod
     def _build_search_query(query: str) -> str:
-        """Quote plain phrases while preserving arXiv's structured query syntax."""
+        """Require every word of a plain query, since arXiv reads bare words as OR,
+        while preserving arXiv's structured query syntax."""
         normalized = " ".join((query or "").split())
         if (
             '"' in normalized
@@ -183,9 +189,10 @@ class ArxivSearcher(PaperSource):
             or ArxivSearcher._BOOLEAN_OP_RE.search(normalized)
         ):
             return normalized
-        if re.search(r"\s", normalized):
+        words = [w for w in normalized.split() if w.lower() not in ArxivSearcher._STOPWORDS]
+        if not words:
             return f'all:"{normalized}"'
-        return f'all:{normalized}'
+        return " AND ".join(f"all:{w}" for w in words)
 
     def search(self, query: str, max_results: int = 10, sort_by: str = 'relevance', sort_order: str = 'descending') -> List[Paper]:
         params = {
