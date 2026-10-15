@@ -97,3 +97,22 @@ def test_zero_results_does_not_call_api(searcher):
 def test_reversed_date_range_is_rejected(searcher):
     with pytest.raises(ValueError, match="start must not be after"):
         searcher.search("2024-02-01/2024-01-01")
+
+
+def test_a_query_that_is_no_category_is_refused(searcher):
+    # The API has no keyword search: it answers an unknown category with every
+    # recent preprint and reports the category as "all".
+    response = _mock_response([_paper_item()])
+    response.json.return_value["messages"] = [{"status": "ok", "category": "all"}]
+    searcher.session.get = Mock(return_value=response)
+
+    with pytest.raises(ValueError, match="category"):
+        searcher.search("large language models on laptops", max_results=5)
+
+
+def test_a_known_category_is_searched(searcher):
+    response = _mock_response([_paper_item()])
+    response.json.return_value["messages"] = [{"status": "ok", "category": "cell biology"}]
+    searcher.session.get = Mock(return_value=response)
+
+    assert len(searcher.search("cell biology", max_results=1)) == 1

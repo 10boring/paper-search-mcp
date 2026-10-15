@@ -27,6 +27,7 @@ class SemanticSearcher(PaperSource):
 
     SEMANTIC_SEARCH_URL = "https://api.semanticscholar.org/graph/v1/paper/search"
     SEMANTIC_BASE_URL = "https://api.semanticscholar.org/graph/v1"
+    MAX_RETRY_WAIT = 30  # seconds; a longer Retry-After is waited out in steps
     BROWSERS = [
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
@@ -169,7 +170,9 @@ class SemanticSearcher(PaperSource):
         Make a request to the Semantic Scholar API with optional API key.
         """
         api_key = self.get_api_key()
-        max_retries = 3 if api_key else 1
+        # Keyless requests share one pool with every other keyless user, so
+        # they get more waits before giving up.
+        max_retries = 3 if api_key else 6
         retry_delay = 5 if api_key is None else 2
         has_retried_without_key = False
 
@@ -195,22 +198,13 @@ class SemanticSearcher(PaperSource):
 
                 # 检查是否是429错误（限流）
                 if response.status_code == 429:
-                    if api_key is None:
-                        logger.warning(
-                            "Semantic Scholar anonymous access is rate-limited (429). "
-                            "Skipping retries; set SEMANTIC_SCHOLAR_API_KEY for higher limits."
-                        )
-                        return {
-                            "error": "rate_limited",
-                            "status_code": 429,
-                            "message": "Too many requests. Set SEMANTIC_SCHOLAR_API_KEY for higher limits.",
-                        }
                     if attempt < max_retries - 1:
                         retry_after = response.headers.get("Retry-After")
-                        wait_time = (
+                        wait_time = min(
                             int(retry_after)
                             if retry_after and retry_after.isdigit()
-                            else retry_delay * (2**attempt)
+                            else retry_delay * (2**attempt),
+                            self.MAX_RETRY_WAIT,
                         )
                         logger.warning(
                             f"Rate limited (429). Waiting {wait_time} seconds before retry {attempt + 1}/{max_retries}"
@@ -243,22 +237,13 @@ class SemanticSearcher(PaperSource):
                     has_retried_without_key = True
                     continue
                 if e.response.status_code == 429:
-                    if api_key is None:
-                        logger.warning(
-                            "Semantic Scholar anonymous access is rate-limited (429). "
-                            "Skipping retries; set SEMANTIC_SCHOLAR_API_KEY for higher limits."
-                        )
-                        return {
-                            "error": "rate_limited",
-                            "status_code": 429,
-                            "message": "Too many requests. Set SEMANTIC_SCHOLAR_API_KEY for higher limits.",
-                        }
                     if attempt < max_retries - 1:
                         retry_after = e.response.headers.get("Retry-After")
-                        wait_time = (
+                        wait_time = min(
                             int(retry_after)
                             if retry_after and retry_after.isdigit()
-                            else retry_delay * (2**attempt)
+                            else retry_delay * (2**attempt),
+                            self.MAX_RETRY_WAIT,
                         )
                         logger.warning(
                             f"Rate limited (429). Waiting {wait_time} seconds before retry {attempt + 1}/{max_retries}"
