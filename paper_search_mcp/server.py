@@ -601,7 +601,7 @@ def _dated_search(source: str, query: str, max_results: int, bounds: tuple[int, 
     if source == "pmc":
         return async_search(pmc_searcher, f"({query}) AND {a}:{b}[pdat]", max_results)
     if source == "core":
-        q = f"({query}) AND yearPublished>={a} AND yearPublished<={b}"
+        q = f"({CORESearcher._build_query(query)}) AND yearPublished>={a} AND yearPublished<={b}"
         return async_search(core_searcher, q, max_results)
     if source == "europepmc":
         return async_search(europepmc_searcher, f"({query}) AND PUB_YEAR:[{a} TO {b}]", max_results)
