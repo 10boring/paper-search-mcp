@@ -5,6 +5,7 @@ import os
 import tempfile
 import requests
 from bs4 import BeautifulSoup
+import itertools
 import time
 import random
 from ..paper import Paper
@@ -28,6 +29,11 @@ class SemanticSearcher(PaperSource):
     SEMANTIC_SEARCH_URL = "https://api.semanticscholar.org/graph/v1/paper/search"
     SEMANTIC_BASE_URL = "https://api.semanticscholar.org/graph/v1"
     MAX_RETRY_WAIT = 30  # seconds; a longer Retry-After is waited out in steps
+    # Keyless requests share one pool with every other keyless user, so getting
+    # through is luck: wait 1, 2, 4 and 8 seconds, then every 8 seconds, for up
+    # to five minutes.
+    KEYLESS_MAX_WAIT = 8
+    KEYLESS_RETRY_SECONDS = 300
     BROWSERS = [
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
@@ -170,13 +176,26 @@ class SemanticSearcher(PaperSource):
         Make a request to the Semantic Scholar API with optional API key.
         """
         api_key = self.get_api_key()
-        # Keyless requests share one pool with every other keyless user, so
-        # they get more waits before giving up.
-        max_retries = 3 if api_key else 6
-        retry_delay = 5 if api_key is None else 2
+        max_retries = 3
+        retry_delay = 2
         has_retried_without_key = False
+        deadline = time.monotonic() + self.KEYLESS_RETRY_SECONDS
 
-        for attempt in range(max_retries):
+        def wait_before_retry(attempt: int, retry_after: Optional[str]) -> Optional[int]:
+            """Seconds to wait before the next try, or None to give up."""
+            if api_key is None:
+                wait = min(2**attempt, self.KEYLESS_MAX_WAIT)
+                return wait if time.monotonic() + wait <= deadline else None
+            if attempt >= max_retries - 1:
+                return None
+            return min(
+                int(retry_after)
+                if retry_after and retry_after.isdigit()
+                else retry_delay * (2**attempt),
+                self.MAX_RETRY_WAIT,
+            )
+
+        for attempt in itertools.count():
             try:
                 headers = {"x-api-key": api_key} if api_key else {}
                 url = f"{self.SEMANTIC_BASE_URL}/{path}"
@@ -198,22 +217,16 @@ class SemanticSearcher(PaperSource):
 
                 # 检查是否是429错误（限流）
                 if response.status_code == 429:
-                    if attempt < max_retries - 1:
-                        retry_after = response.headers.get("Retry-After")
-                        wait_time = min(
-                            int(retry_after)
-                            if retry_after and retry_after.isdigit()
-                            else retry_delay * (2**attempt),
-                            self.MAX_RETRY_WAIT,
-                        )
+                    wait_time = wait_before_retry(attempt, response.headers.get("Retry-After"))
+                    if wait_time is not None:
                         logger.warning(
-                            f"Rate limited (429). Waiting {wait_time} seconds before retry {attempt + 1}/{max_retries}"
+                            f"Rate limited (429). Waiting {wait_time} seconds before retry {attempt + 1}"
                         )
                         time.sleep(wait_time)
                         continue
                     else:
                         logger.error(
-                            f"Rate limited (429) after {max_retries} attempts. Please wait before making more requests."
+                            f"Rate limited (429) after {attempt + 1} attempts. Please wait before making more requests."
                         )
                         return {
                             "error": "rate_limited",
@@ -237,22 +250,16 @@ class SemanticSearcher(PaperSource):
                     has_retried_without_key = True
                     continue
                 if e.response.status_code == 429:
-                    if attempt < max_retries - 1:
-                        retry_after = e.response.headers.get("Retry-After")
-                        wait_time = min(
-                            int(retry_after)
-                            if retry_after and retry_after.isdigit()
-                            else retry_delay * (2**attempt),
-                            self.MAX_RETRY_WAIT,
-                        )
+                    wait_time = wait_before_retry(attempt, e.response.headers.get("Retry-After"))
+                    if wait_time is not None:
                         logger.warning(
-                            f"Rate limited (429). Waiting {wait_time} seconds before retry {attempt + 1}/{max_retries}"
+                            f"Rate limited (429). Waiting {wait_time} seconds before retry {attempt + 1}"
                         )
                         time.sleep(wait_time)
                         continue
                     else:
                         logger.error(
-                            f"Rate limited (429) after {max_retries} attempts. Please wait before making more requests."
+                            f"Rate limited (429) after {attempt + 1} attempts. Please wait before making more requests."
                         )
                         return {
                             "error": "rate_limited",
