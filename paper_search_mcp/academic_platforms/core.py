@@ -1,5 +1,6 @@
 # paper_search_mcp/academic_platforms/core.py
 from typing import List, Optional, Dict, Any
+import re
 import requests
 import logging
 import os
@@ -39,6 +40,23 @@ class CORESearcher(PaperSource):
         else:
             logger.warning("No CORE API key provided. Searches may be rate-limited or return limited results.")
 
+    # Lucene's English stopwords, which CORE's index leaves out.
+    _STOPWORDS = frozenset(
+        "a an and are as at be but by for if in into is it no not of on or such "
+        "that the their then there these they this to was will with".split()
+    )
+    _STRUCTURED_RE = re.compile(r'"|:|(?:^|\s)(?:AND|OR|NOT)(?:\s|$)')
+
+    @staticmethod
+    def _build_query(query: str) -> str:
+        """Require every word of a plain query, since CORE reads bare words as
+        OR; a query with quotes, fields or operators is left as written."""
+        normalized = " ".join((query or "").split())
+        if CORESearcher._STRUCTURED_RE.search(normalized):
+            return normalized
+        words = [w for w in normalized.split() if w.lower() not in CORESearcher._STOPWORDS]
+        return " AND ".join(words) if words else normalized
+
     def search(self, query: str, max_results: int = 10, **kwargs) -> List[Paper]:
         """
         Search CORE for open access research papers.
@@ -60,7 +78,7 @@ class CORESearcher(PaperSource):
         try:
             # Prepare search parameters
             params = {
-                'q': query,
+                'q': self._build_query(query),
                 'limit': min(max_results, 100),  # CORE API max limit is 100
                 'offset': 0,
             }
