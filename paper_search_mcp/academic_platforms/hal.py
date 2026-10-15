@@ -80,8 +80,11 @@ class HALSearcher(PaperSource):
 
         fq_parts: List[str] = []
 
-        year = kwargs.get("year")
-        if year:
+        year = str(kwargs.get("year") or "")
+        if "-" in year:
+            first, _, last = year.partition("-")
+            fq_parts.append(f"publicationDateY_i:[{first} TO {last}]")
+        elif year:
             fq_parts.append(f"publicationDateY_i:{year}")
 
         doctype = kwargs.get("doctype", "")

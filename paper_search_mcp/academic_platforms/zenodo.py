@@ -89,9 +89,11 @@ class ZenodoSearcher(PaperSource):
         if access_right:
             params["access_right"] = access_right
 
-        year = kwargs.get("year")
+        year = str(kwargs.get("year") or "")
         if year:
-            params["q"] = f"{query} AND publication_date:[{year}-01-01 TO {year}-12-31]"
+            first, _, last = year.partition("-")
+            last = last or first
+            params["q"] = f"{query} AND publication_date:[{first}-01-01 TO {last}-12-31]"
 
         try:
             response = self.session.get(
