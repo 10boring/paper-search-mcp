@@ -576,6 +576,47 @@ async def _try_repository_fallback(
     return None, "; ".join(repository_errors)
 
 
+
+def _year_bounds(year: str) -> Optional[tuple[int, int]]:
+    """A year filter as (first, last) year: '2026', '2025-2026', or '2025-'
+    for that year until now. Anything else is no filter."""
+    m = re.fullmatch(r"\s*(\d{4})\s*(-\s*(\d{4})?)?\s*", year or "")
+    if not m:
+        return None
+    first = int(m.group(1))
+    if m.group(3):
+        return first, int(m.group(3))
+    return (first, time.localtime().tm_year) if m.group(2) else (first, first)
+
+
+def _dated_search(source: str, query: str, max_results: int, bounds: tuple[int, int]):
+    """A search of one source limited to the years in bounds, in the form that
+    source's API filters by; None for a source that cannot filter by date."""
+    a, b = bounds
+    if source == "arxiv":
+        q = f"({ArxivSearcher._build_search_query(query)}) AND submittedDate:[{a}01010000 TO {b}12312359]"
+        return async_search(arxiv_searcher, q, max_results)
+    if source == "pubmed":
+        return async_search(pubmed_searcher, f"({query}) AND {a}:{b}[dp]", max_results)
+    if source == "pmc":
+        return async_search(pmc_searcher, f"({query}) AND {a}:{b}[pdat]", max_results)
+    if source == "core":
+        q = f"({query}) AND yearPublished>={a} AND yearPublished<={b}"
+        return async_search(core_searcher, q, max_results)
+    if source == "europepmc":
+        return async_search(europepmc_searcher, f"({query}) AND PUB_YEAR:[{a} TO {b}]", max_results)
+    if source == "openalex":
+        return async_search(openalex_searcher, query, max_results, filter=f"publication_year:{a}-{b}")
+    if source == "crossref":
+        return async_search(crossref_searcher, query, max_results,
+                            filter=f"from-pub-date:{a}-01-01,until-pub-date:{b}-12-31")
+    searcher = {"doaj": doaj_searcher, "dblp": dblp_searcher, "openaire": openaire_searcher,
+                "zenodo": zenodo_searcher, "hal": hal_searcher}.get(source)
+    if searcher is not None:
+        return async_search(searcher, query, max_results, year=f"{a}-{b}")
+    return None
+
+
 @mcp.tool(annotations={"readOnlyHint": True, "openWorldHint": True})
 async def search_papers(
     query: str,
@@ -590,7 +631,8 @@ async def search_papers(
         max_results_per_source: Max results to fetch from each selected source.
         sources: Comma-separated source names or 'all'.
             Available: arxiv,pubmed,biorxiv,medrxiv,google_scholar,iacr,semantic,crossref,openalex,pmc,core,europepmc,dblp,openaire,citeseerx,doaj,base,zenodo,hal,ssrn,openreview,unpaywall
-        year: Optional year filter for Semantic Scholar only.
+        year: Optional year filter, such as '2026', '2020-2025' or '2020-', for
+            every source that can filter by date.
     Returns:
         Aggregated dictionary with per-source stats, errors, and deduplicated papers.
     """
@@ -613,8 +655,12 @@ async def search_papers(
         }
 
     task_map = {}
+    bounds = _year_bounds(year)
     for source in selected_sources:
-        if source == "arxiv":
+        dated = _dated_search(source, query, max_results_per_source, bounds) if bounds else None
+        if dated is not None:
+            task_map[source] = dated
+        elif source == "arxiv":
             task_map[source] = search_arxiv(query, max_results_per_source)
         elif source == "pubmed":
             task_map[source] = search_pubmed(query, max_results_per_source)
