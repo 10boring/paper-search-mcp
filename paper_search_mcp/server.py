@@ -50,6 +50,8 @@ mcp = FastMCP("paper_search_server")
 logger = logging.getLogger(__name__)
 GOOGLE_SCHOLAR_TOOL_TIMEOUT_SECONDS = 20.0
 SEARCH_PAPERS_SOURCE_TIMEOUT_SECONDS = 45.0
+# Keyless Semantic Scholar retries a 429 for up to about 100 seconds.
+SEMANTIC_SOURCE_TIMEOUT_SECONDS = 120.0
 SEARCH_EXECUTOR_MAX_WORKERS = 32
 
 
@@ -670,7 +672,11 @@ async def search_papers(
     source_names = list(task_map.keys())
     source_outputs = await asyncio.gather(
         *(
-            _run_search_with_timeout(source_name, search_task)
+            _run_search_with_timeout(
+                source_name,
+                search_task,
+                SEMANTIC_SOURCE_TIMEOUT_SECONDS if source_name == "semantic" else None,
+            )
             for source_name, search_task in task_map.items()
         ),
         return_exceptions=True,

@@ -480,3 +480,23 @@ def test_timeout_path_passes_source_options_without_constructing_parent_searcher
     ])
     assert asyncio.run(cli.cmd_search(args)) == 0
     assert json.loads(capsys.readouterr().out)["errors"] == {}
+
+
+def test_semantic_scholar_gets_time_to_wait_out_its_rate_limit():
+    # Keyless Semantic Scholar answers 429 often and is retried with backoff,
+    # so the shared per-source deadline would cut it off mid-wait.
+    async def patient_search(*args, **kwargs):
+        await asyncio.sleep(0.05)
+        return [{"title": "patient", "paper_id": "semantic-1"}]
+
+    with (
+        patch.object(server, "SEARCH_PAPERS_SOURCE_TIMEOUT_SECONDS", 0.01),
+        patch.object(server, "SEMANTIC_SOURCE_TIMEOUT_SECONDS", 1.0),
+        patch.object(server, "search_semantic", AsyncMock(side_effect=patient_search)),
+    ):
+        result = asyncio.run(
+            server.search_papers("test query", max_results_per_source=1, sources="semantic")
+        )
+
+    assert result["source_results"] == {"semantic": 1}
+    assert result["errors"] == {}
