@@ -13,6 +13,17 @@ from .base import PaperSource
 
 logger = logging.getLogger(__name__)
 
+def refuse_unknown_category(data: dict, category: str | None, archive: str) -> None:
+    """The API has no keyword search. Asked for a category it does not know,
+    it returns every recent preprint and reports the category as "all"."""
+    if not category:
+        return
+    messages = data.get("messages") or [{}]
+    if str(messages[0].get("category") or "").strip().lower() == "all":
+        raise ValueError(
+            f"{archive} searches by category only, and {category!r} is not one of its categories"
+        )
+
 
 class BioRxivSearcher(PaperSource):
     """Searcher for bioRxiv papers"""
@@ -149,6 +160,7 @@ class BioRxivSearcher(PaperSource):
             data = self._request_json(url)
             if not data:
                 break
+            refuse_unknown_category(data, category, "bioRxiv")
 
             collection = data.get("collection") or []
             if not collection:

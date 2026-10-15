@@ -5,6 +5,7 @@ import os
 from datetime import datetime, timedelta
 from ..paper import Paper
 from .base import PaperSource
+from .biorxiv import refuse_unknown_category
 from pypdf import PdfReader
 
 logger = logging.getLogger(__name__)
@@ -52,6 +53,7 @@ class MedRxivSearcher(PaperSource):
                     response = self.session.get(url, timeout=self.timeout)
                     response.raise_for_status()
                     data = response.json()
+                    refuse_unknown_category(data, category, "medRxiv")
                     collection = data.get('collection', [])
                     for item in collection:
                         try:

@@ -25,8 +25,8 @@ class TestMedRxivSearcher(unittest.TestCase):
         if not self.api_accessible:
             self.skipTest("medRxiv API is not accessible")
         
-        papers = self.searcher.search("machine learning", max_results=10)
-        print(f"Found {len(papers)} papers for query 'machine learning':")
+        papers = self.searcher.search("epidemiology", max_results=10)
+        print(f"Found {len(papers)} papers for category 'epidemiology':")
         for i, paper in enumerate(papers, 1):
             print(f"{i}. {paper.title} (ID: {paper.paper_id})")
         self.assertTrue(len(papers) > 0)
@@ -36,7 +36,7 @@ class TestMedRxivSearcher(unittest.TestCase):
         if not self.api_accessible:
             self.skipTest("medRxiv API is not accessible")
             
-        papers = self.searcher.search("machine learning", max_results=1)
+        papers = self.searcher.search("epidemiology", max_results=1)
         if not papers:
             self.skipTest("No papers found for testing download")
             
